@@ -33,7 +33,6 @@ class TenantAuthMiddleware(BaseHTTPMiddleware):
             tenant_raw = await r.hgetall(f"tenant:{api_key}")
             await r.close()
         except Exception as e:
-            print("Redis错误:", str(e))
             traceback.print_exc()
             return JSONResponse(
                 {'error':"鉴权服务不可用"},
