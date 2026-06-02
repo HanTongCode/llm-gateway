@@ -5,7 +5,8 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from gateway.guard import GuardPipeline,PromptInjectionGuard,SensitiveWordGuard,DataLeakGuard
 from gateway.guard.output import OutputSensitiveGuard,SystemPromptLeakGuard
 import json
-
+from gateway.audit.context import AuditContext
+from fastapi import Request
 # 初始化输入护栏管道（模块加载时创建一次，不用每次请求都创建）
 input_pipeline = GuardPipeline([
     PromptInjectionGuard(),
@@ -26,7 +27,7 @@ def extract_user_message(messages: list) -> str:
             return msg.get("content", "")
     return ""
 
-async def dispatch_to_model(body: dict) :
+async def dispatch_to_model(body: dict,request: Request, ctx: AuditContext) :
     """转发请求到模型后端，返回完整响应"""
     model = body.get("model", "deepseek-chat")
     base_url = settings.MODEL_ROUTES.get(model, settings.LLM_BASE_URL)
@@ -75,6 +76,12 @@ async def dispatch_to_model(body: dict) :
                 status_code=422,
             )
         # ==================================
+        # 提取Token用量
+        usage = data.get("usage", {})
+        ctx.tokens_prompt = usage.get("prompt_tokens", 0)
+        ctx.tokens_completion = usage.get("completion_tokens", 0)
+        ctx.tokens_total = usage.get("total_tokens", 0)
+        ctx.status_code = 200
         return JSONResponse(content=data)
 
 async def _stream_response(url: str, headers: dict, body: dict):
