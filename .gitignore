@@ -9,3 +9,4 @@ build/
 .vscode/
 test.py
 start.bat
+logs/
