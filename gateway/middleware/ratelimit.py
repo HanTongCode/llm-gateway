@@ -3,7 +3,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from gateway.ratelimit.token_bucket import token_bucket
-
+from gateway.metrics import rate_limit_hits
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """租户级别限流中间件"""
     # 默认限流参数
@@ -25,6 +25,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # 消耗令牌
         allowed = await token_bucket.consume(key, self.DEFAULT_RATE, self.DEFAULT_CAPACITY)
         if not allowed:
+            # 记录限流指标
+            rate_limit_hits.labels(tenant=tenant_id).inc()
             return JSONResponse(
                 {"error": "请求过于频繁，请稍后再试", "retry_after": "1"},
                 status_code=429,
