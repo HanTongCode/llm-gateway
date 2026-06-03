@@ -10,6 +10,8 @@ class Settings():
     LLM_API_KEY = os.getenv("LLM_API_KEY")
     LLM_BASE_URL = os.getenv("LLM_BASE_URL")
     REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+    EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+    CACHE_SIMILARITY_THRESHOLD = float(os.getenv("CACHE_SIMILARITY_THRESHOLD", "0.92"))
     #路由修改
     MODEL_ROUTES = {
         "deepseek-chat": LLM_BASE_URL,

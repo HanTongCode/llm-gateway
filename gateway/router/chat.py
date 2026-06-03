@@ -1,4 +1,5 @@
 import asyncio
+import json
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -15,6 +16,8 @@ from gateway.metrics import (
     rate_limit_hits,
 )
 import time as time_module  # 避免与 datetime 冲突，如果已引入 time 则直接用 time.time()
+from gateway.cache.semantic_cache import semantic_cache
+
 router = APIRouter()
 class Message(BaseModel):
     role: str
@@ -49,9 +52,37 @@ async def chat_completions(body: ChatRequest,request: Request):
         ctx.error = access_error.body.decode("utf-8")
         asyncio.create_task(audit_logger.log(ctx.to_dict()))
         return access_error
+    # ========== 语义缓存 ==========
+    user_msg = body.messages[-1].content  # 取最后一条用户消息
+    cached = await semantic_cache.get(user_msg)
+    if cached:
+        ctx.status_code = 200
+        ctx.tokens_prompt = 0
+        ctx.tokens_completion = 0
+        ctx.tokens_total = 0
+        asyncio.create_task(audit_logger.log(ctx.to_dict()))
+        return JSONResponse(content={
+            "id": "cache-hit",
+            "object": "chat.completion",
+            "model": body.model,
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": cached["content"]},
+                "finish_reason": "cache"
+            }],
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            "cached": True,
+        })
+
+    # ==========================================
      # 调用分发（内部已包含护栏）
     response = await dispatch_to_model(body.model_dump(), request, ctx)
-
+    # 成功时缓存非流式响应
+    if hasattr(response, "status_code") and response.status_code == 200:
+        # 提取响应内容
+        content = json.loads(response.body.decode("utf-8"))
+        reply = content["choices"][0]["message"]["content"]
+        asyncio.create_task(semantic_cache.set(body.messages[-1].content, reply))
     # 记录指标
     status_code = ctx.status_code
     request_total.labels(
