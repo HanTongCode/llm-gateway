@@ -28,6 +28,7 @@ class ChatRequest(BaseModel):
     model: str = "deepseek-chat"
     messages: List[Message]
     stream: Optional[bool] = False
+    cache_bypass: Optional[bool] = False
 
 @router.get("/")
 async def index(request: Request):
@@ -54,7 +55,11 @@ async def chat_completions(body: ChatRequest,request: Request):
         return access_error
     # ========== 语义缓存 ==========
     user_msg = body.messages[-1].content  # 取最后一条用户消息
-    cached = await semantic_cache.get(user_msg)
+    # 如果客户端请求绕过缓存，则跳过缓存查询
+    if not body.cache_bypass:
+        cached = await semantic_cache.get(user_msg)
+    else:
+        cached = None
     if cached:
         ctx.status_code = 200
         ctx.tokens_prompt = 0

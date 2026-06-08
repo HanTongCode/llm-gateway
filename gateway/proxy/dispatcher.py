@@ -48,8 +48,15 @@ async def dispatch_to_model(body: dict,request: Request, ctx: AuditContext) :
 
     url = f"{base_url}/chat/completions"
 
+    # 根据模型选择 API Key
+    model = body.get("model", "deepseek-chat")
+    if model.startswith("gpt"):
+        api_key = settings.OPENAI_API_KEY
+    else:
+        api_key = settings.LLM_API_KEY
+
     headers = {
-        "Authorization": f"Bearer {settings.LLM_API_KEY}",
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
 
