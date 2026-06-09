@@ -4,6 +4,9 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List, Optional
+
+from starlette.responses import StreamingResponse
+
 from gateway.proxy.dispatcher import dispatch_to_model
 from gateway.tenant.service import check_model_access
 from gateway.audit.context import AuditContext
@@ -17,6 +20,7 @@ from gateway.metrics import (
 )
 import time as time_module  # 避免与 datetime 冲突，如果已引入 time 则直接用 time.time()
 from gateway.cache.semantic_cache import semantic_cache
+from gateway.utils.stream_utils import simulate_cache_stream
 
 router = APIRouter()
 class Message(BaseModel):
@@ -66,7 +70,14 @@ async def chat_completions(body: ChatRequest,request: Request):
         ctx.tokens_completion = 0
         ctx.tokens_total = 0
         asyncio.create_task(audit_logger.log(ctx.to_dict()))
-        return JSONResponse(content={
+        if body.stream:
+            # 缓存命中且要求流式：模拟 SSE 流
+            return StreamingResponse(
+                simulate_cache_stream(cached["content"]),
+                media_type="text/event-stream",
+            )
+        else:
+            return JSONResponse(content={
             "id": "cache-hit",
             "object": "chat.completion",
             "model": body.model,
@@ -83,7 +94,7 @@ async def chat_completions(body: ChatRequest,request: Request):
      # 调用分发（内部已包含护栏）
     response = await dispatch_to_model(body.model_dump(), request, ctx)
     # 成功时缓存非流式响应
-    if hasattr(response, "status_code") and response.status_code == 200:
+    if  not body.stream and hasattr(response, "status_code") and response.status_code == 200:
         # 提取响应内容
         content = json.loads(response.body.decode("utf-8"))
         reply = content["choices"][0]["message"]["content"]
