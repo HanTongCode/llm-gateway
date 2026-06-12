@@ -59,7 +59,6 @@ async def dispatch_to_model(body: dict,request: Request, ctx: AuditContext) :
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-
     if body.get("stream"):
         # 流式：返回一个异步生成器，保持 session 存活
         return StreamingResponse(
