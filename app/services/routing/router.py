@@ -13,34 +13,9 @@ import json
 import aiohttp
 from fastapi import Request
 from fastapi.responses import JSONResponse, StreamingResponse
-
-# ---- 已迁移的新路径模块 ----
 from app.core.config import settings
-from app.services.compliance import (
-    GuardPipeline,
-    PromptInjectionGuard,
-    SensitiveWordGuard,
-    DataLeakGuard,
-)
-from app.services.compliance.output_guards import OutputSensitiveGuard, SystemPromptLeakGuard
-from app.services.resilience.cache import semantic_cache
 from app.core.audit_context import AuditContext
-
-# ======================== 护栏管道初始化 ========================
-
-# 输入护栏：在请求转发到模型之前执行
-input_pipeline = GuardPipeline([
-    PromptInjectionGuard(),    # 检测提示注入攻击
-    SensitiveWordGuard(),      # 过滤敏感词汇
-    DataLeakGuard(),           # 拦截手机号、身份证等敏感信息
-])
-
-# 输出护栏：在模型响应返回给客户端之前执行
-output_pipeline = GuardPipeline([
-    OutputSensitiveGuard(),    # 检查生成内容是否违规
-    SystemPromptLeakGuard(),   # 检测是否泄露了系统提示词
-])
-
+from app.services.compliance import RegisteredTemplateGuard
 
 # ======================== 自定义异常 ========================
 
@@ -76,7 +51,7 @@ def _extract_delta_text(chunk: bytes) -> str:
     return ""
 
 
-async def _check_output(data: dict, pipeline: GuardPipeline):
+async def _check_output(data: dict, pipeline):
     """
     检查非流式响应的输出内容
     违规时抛出 OutputGuardViolation 异常
@@ -96,7 +71,7 @@ async def _stream_and_guard(
     url: str,
     headers: dict,
     body: dict,
-    pipeline: GuardPipeline,
+    pipeline,
 ) -> str:
     """
     流式生成器：逐块转发 SSE 数据，同时增量执行输出护栏检查
@@ -104,46 +79,53 @@ async def _stream_and_guard(
     - 检测到违规时主动切断流，返回错误消息
     """
     accumulated = ""
-    check_interval = 20  # 每累积 20 字符检查一次
+    check_interval = 20
 
     async with aiohttp.ClientSession() as session:
         async with session.post(url, json=body, headers=headers) as resp:
             async for chunk in resp.content.iter_any():
                 yield chunk
 
-                # 提取本次 chunk 中的文本增量
                 text = _extract_delta_text(chunk)
                 if text:
                     accumulated += text
 
-                    # 满 check_interval 字符时触发护栏检查
                     if len(accumulated) >= check_interval:
                         result = await pipeline.run(accumulated)
                         if not result.passed:
-                            # 违规：生成错误消息并终止流
                             error_msg = json.dumps({
                                 "error": f"输出内容违反安全策略: {result.reason}",
                                 "guard": result.guard_name,
                             })
                             yield f"data: {error_msg}\n\n".encode("utf-8")
                             return
-                        # 增加检查间隔，避免对同一内容重复检查
                         check_interval += 20
 
+# ---- System Prompt 模板校验（单独处理） ----
+def _extract_first_system_message(messages: list) -> str | None:
+    """从消息列表中提取第一条 System Prompt"""
+    for msg in messages:
+        if msg.get("role") == "system":
+            return msg.get("content", "")
+    return None
 
+def _update_last_user_message(messages: list, new_content: str):
+    """替换最后一条 user 消息的内容（用于脱敏后更新）"""
+    for msg in reversed(messages):
+        if msg.get("role") == "user":
+            msg["content"] = new_content
+            break
 # ======================== 核心转发函数 ========================
 
-async def dispatch_to_model(body: dict, request: Request, ctx: AuditContext):
+async def dispatch_to_model(
+    body: dict,
+    request: Request,
+    ctx: AuditContext,
+    input_pipeline,
+    output_pipeline,
+):
     """
     将请求转发到对应的模型后端，执行完整的护栏流程。
-
-    Args:
-        body: 客户端请求体
-        request: FastAPI Request 对象
-        ctx: 审计上下文，用于填充状态码、Token 等信息
-
-    Returns:
-        JSONResponse（非流式）或 StreamingResponse（流式）
     """
     model = body.get("model", "deepseek-chat")
     base_url = settings.MODEL_ROUTES.get(model)
@@ -169,7 +151,13 @@ async def dispatch_to_model(body: dict, request: Request, ctx: AuditContext):
                 },
                 status_code=422,
             )
-
+    system_msgs = _extract_first_system_message(body.get("messages", []))
+    if system_msgs:
+        template_guard = RegisteredTemplateGuard()
+        guard_result = await template_guard.check(system_msgs)
+        if not guard_result.passed:
+            ctx.guard_triggered = guard_result.guard_name
+            # 低风险策略：记录但不拦截，继续处理请求
     # ---- 构造转发请求 ----
     url = f"{base_url}/chat/completions"
     headers = {

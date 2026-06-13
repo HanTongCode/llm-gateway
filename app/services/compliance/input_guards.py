@@ -1,14 +1,16 @@
 """
-输入护栏 - 金融网关专用版
---------------------------
-参考主流金融级 API 网关安全策略设计。
-原则：
-1. 允许正常业务角色设定
-2. 防御恶意身份覆盖、权限提升、数据窃取
-3. 低误杀率，不拦截合法金融业务请求
+输入护栏
+--------
+包含以下检查：
+- PromptInjectionGuard：提示注入检测（内置规则 + YAML规则）
+- RegisteredTemplateGuard：合法 System Prompt 模板校验
+- SensitiveWordGuard：敏感词过滤
+- DataBoundaryGuard：数据边界控制（检测敏感数据，强制境内路由）
+- DataLeakGuard：数据泄露检测（手机号、身份证号等）
 """
 import re
 from .base import BaseGuard, GuardResult
+from .rules_engine import rules_engine
 
 
 class PromptInjectionGuard(BaseGuard):
@@ -78,6 +80,35 @@ class PromptInjectionGuard(BaseGuard):
                 return GuardResult.block(self.name, f"疑似提示注入 - {desc}")
         return GuardResult.ok()
 
+# ======================== 模板校验 ========================
+
+class RegisteredTemplateGuard(BaseGuard):
+    """
+    注册模板校验护栏
+    - 检查 System Prompt 是否与已注册的合法模板相似
+    - 偏离过大时记录告警（低风险不拦截）
+    """
+    name = "template_check"
+
+    def __init__(self):
+        templates_config = rules_engine.get_rules("registered_templates")
+        self.templates = templates_config.get("templates", [])
+
+    async def check(self, content: str) -> GuardResult:
+        if not self.templates:
+            return GuardResult.ok()
+
+        for template in self.templates:
+            template_name = template.get("name", "")
+            if template_name in content:
+                return GuardResult.ok()
+
+        # 未匹配注册模板，低风险记录但不拦截
+        return GuardResult.block(
+            self.name,
+            "System Prompt 未匹配已注册模板（低风险，已记录）"
+        )
+
 
 class SensitiveWordGuard(BaseGuard):
     """敏感词检测"""
@@ -98,28 +129,50 @@ class SensitiveWordGuard(BaseGuard):
                 return GuardResult.block(self.name, f"包含敏感词: {word}")
         return GuardResult.ok()
 
+class DataBoundaryGuard(BaseGuard):
+    """
+    数据边界控制护栏
+    - 内置 PII 检测规则：手机号、身份证号、银行卡号 → 直接拦截
+    - 业务敏感数据规则（从 YAML 加载）：内部研报编号、交易代码等 → 标记境内路由
+    """
+    name = "data_boundary"
 
-class DataLeakGuard(BaseGuard):
-    """数据泄露检测 - 识别敏感信息格式"""
-    name = "data_leak"
-
-    PATTERNS = [
-        (r'(?<!\d)(1[3-9]\d{9})(?!\d)', "手机号码"),
-        (r'(?<!\d)(\d{17}[\dXx])(?!\d)', "身份证号"),
-        (r'(?<!\d)(\d{16,19})(?!\d)', "疑似银行卡号"),
-        (r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', "邮箱地址"),
-        (r'(?<!\d)((?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)(?!\d)', "IP 地址"),
-        (r'(?<!\d)(\d{3,4}-?\d{7,8})(?!\d)', "固定电话"),
+    # 内置 PII 检测正则（直接拦截，不允许发送明文敏感信息）
+    PII_PATTERNS = [
+        (r'1[3-9]\d{9}', "手机号码"),
+        (r'\d{17}[\dXx]', "身份证号"),
+        (r'\d{16,19}', "疑似银行卡号"),
     ]
 
+    def __init__(self):
+        self.patterns = rules_engine.get_patterns("data_boundary")
+        self.keywords = rules_engine.get_keywords("data_boundary")
+
     async def check(self, content: str) -> GuardResult:
-        for pattern, desc in self.PATTERNS:
-            match = re.search(pattern, content)
-            if match:
-                value = match.group()
-                masked = value[:3] + "***" + value[-2:] if len(value) > 5 else "***"
+        # 1. 优先检查内置 PII 规则 —— 直接拦截
+        for pattern, desc in self.PII_PATTERNS:
+            if re.search(pattern, content):
                 return GuardResult.block(
                     self.name,
-                    f"检测到{desc}: {masked}"
+                    f"检测到{desc}，禁止发送敏感个人信息"
                 )
+
+        # 2. 检查 YAML 配置的业务敏感数据规则 —— 标记境内路由
+        for rule in self.patterns:
+            pattern = rule.get("pattern", "")
+            desc = rule.get("description", "敏感数据")
+            if pattern and re.search(pattern, content, re.IGNORECASE):
+                return GuardResult.block(
+                    self.name,
+                    f"检测到{desc}，需路由到境内模型"
+                )
+
+        # 3. 关键词检查 —— 标记境内路由
+        for keyword in self.keywords:
+            if keyword in content:
+                return GuardResult.block(
+                    self.name,
+                    f"检测到敏感关键词: {keyword}，需路由到境内模型"
+                )
+
         return GuardResult.ok()

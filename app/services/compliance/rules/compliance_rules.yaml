@@ -1,0 +1,76 @@
+# 合规规则配置
+# 版本号：每次修改后手动更新，或由 CI/CD 自动生成
+version: "1.0.0"
+
+# ======================== 数据边界控制 ========================
+data_boundary:
+  description: "敏感数据检测，触发后强制路由到国内模型"
+  patterns:
+    - pattern: '\b\d{15,19}\b'
+      description: "身份证号/银行卡号"
+    - pattern: '\b1[3-9]\d{9}\b'
+      description: "手机号码"
+    - pattern: '(研报|研究报告)\s*编号[:：]?\s*[A-Za-z0-9\-]+'
+      description: "内部研报编号"
+    - pattern: '(交易|委托|持仓)\s*(代码|编号)[:：]?\s*\d{6}'
+      description: "交易代码/持仓信息"
+    - pattern: '(客户|用户|会员)\s*(编号|ID|账号)[:：]?\s*[A-Za-z0-9\-]+'
+      description: "客户标识信息"
+  keywords:
+    - "内部研报"
+    - "客户信息"
+    - "交易记录"
+    - "持仓明细"
+    - "征信报告"
+
+# ======================== Prompt 注入防护 ========================
+prompt_injection:
+  description: "Prompt 注入检测规则（补充内置规则）"
+  patterns: []
+  keywords: []
+
+# ======================== PII 脱敏规则 ========================
+pii_masking:
+  description: "PII 脱敏规则，匹配后替换为占位符"
+  patterns:
+    - pattern: '\b(1[3-9]\d{9})\b'
+      type: "phone"
+    - pattern: '\b(\d{17}[\dXx])\b'
+      type: "id_card"
+    - pattern: '\b(\d{16,19})\b'
+      type: "bank_card"
+    - pattern: '([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})'
+      type: "email"
+  keywords: []
+
+# ======================== 输出合规扫描 ========================
+output_compliance:
+  description: "输出内容合规检查规则"
+  light_weight:
+    patterns:
+      - pattern: '(建议|推荐)\s*(买入|卖出|持有)'
+        description: "投资建议用语"
+      - pattern: '目标价\s*[:：]?\s*[\d.]+'
+        description: "目标价预测"
+      - pattern: '(保证|承诺|肯定|绝对|100%|百分之百)\s*(收益|回报|盈利|赚钱)'
+        description: "保本承诺"
+      - pattern: '(内幕|内部|未公开|独家)\s*(消息|信息|情报)'
+        description: "疑似内幕信息"
+      - pattern: '(利率|汇率|股指|期货)\s*(预测|预判|猜想)'
+        description: "金融预测（需持牌）"
+    keywords:
+      - "强烈推荐"
+      - "保证收益"
+      - "稳赚不赔"
+      - "内幕消息"
+
+# ======================== 模板注册（合法 System Prompt） ========================
+registered_templates:
+  description: "已注册的合法 System Prompt 模板"
+  templates:
+    - name: "金融分析师"
+      content: "你现在是一个金融分析师，负责分析财报、行业报告和宏观经济数据。"
+      similarity_threshold: 0.85
+    - name: "合规审查员"
+      content: "你是一个合规审查员，负责检查金融产品的合规性和风险披露。"
+      similarity_threshold: 0.85

@@ -10,6 +10,28 @@ from app.api.request_prepare import prepare_request
 from app.api.cache_handler import try_fulfill_cache
 from app.api.finalizer import finalize_request
 from app.services.routing.router import dispatch_to_model
+# 护栏管道初始化
+from app.services.compliance import (
+    GuardPipeline,
+    PromptInjectionGuard,
+    SensitiveWordGuard,
+    DataBoundaryGuard,
+    OutputSensitiveGuard,
+    SystemPromptLeakGuard,
+    FinancialComplianceGuard,
+)
+
+input_pipeline = GuardPipeline([
+    PromptInjectionGuard(),
+    SensitiveWordGuard(),
+    DataBoundaryGuard(),
+])
+
+output_pipeline = GuardPipeline([
+    OutputSensitiveGuard(),
+    SystemPromptLeakGuard(),
+    FinancialComplianceGuard(),
+])
 
 router = APIRouter()
 
@@ -31,7 +53,10 @@ async def chat_completions(body: ChatRequest, request: Request):
         return response
 
     # 3. 模型转发（护栏 + 路由 + 调用）
-    response = await dispatch_to_model(body.model_dump(), request, ctx)
+    response = await dispatch_to_model(
+        body.model_dump(), request, ctx,
+        input_pipeline, output_pipeline  # 传入管道
+    )
 
     # 4. 后置收尾（指标 + 缓存 + 审计）
     finalize_request(ctx, body, response)

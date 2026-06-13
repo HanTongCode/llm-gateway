@@ -27,20 +27,17 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         # ---- 1. 路径过滤 ----
-        print(">>> [限流] 中间件被调用")
         if request.url.path != "/v1/chat/completions":
             return await call_next(request)
 
         # ---- 2. 获取租户信息 ----
         tenant = getattr(request.state, "tenant", None)
-        print(f">>> [限流] 租户信息: {tenant}")
         if tenant is None:
             # 理论上鉴权中间件会处理，这里兜底放行
             return await call_next(request)
 
         tenant_id = tenant["id"]
         key = f"rate:{tenant_id}"
-        print(f">>> [限流] 准备消耗令牌，key={key}")
         # ---- 3. 消耗令牌 ----
         allowed = await token_bucket.consume(
             key,
@@ -50,11 +47,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         # ---- 4. 令牌不足，返回 429 ----
         if not allowed:
-            print(">>> [限流] 令牌不足，返回429")
             return JSONResponse(
                 {"error": "请求过于频繁，请稍后再试"},
                 status_code=429,
             )
-        print(">>> [限流] 令牌充足，放行")
         # ---- 5. 令牌充足，放行 ----
         return await call_next(request)
