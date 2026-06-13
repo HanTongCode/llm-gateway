@@ -6,7 +6,6 @@
 2. 查询 Redis 中的租户信息（tenant:{api_key}）
 3. 验证 API Key 有效性、租户状态（active/disabled）
 4. 将租户 ID、名称、允许的模型列表注入 request.state
-5. 支持配置热加载：修改 Redis 即时生效，无需重启网关
 """
 import redis.asyncio as redis
 from fastapi import Request
