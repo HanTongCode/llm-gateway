@@ -14,6 +14,7 @@ from app.api.finalizer import finalize_request
 from app.services.routing.router import dispatch_to_model
 from app.services.routing import ModelRouter, RoutingStrategy
 from app.adapters.registry import registry
+from app.core.config import settings
 # 护栏管道初始化
 from app.services.compliance import (
     GuardPipeline,
@@ -39,7 +40,7 @@ output_pipeline = GuardPipeline([
 
 router = APIRouter()
 # 自动发现并加载所有适配器（必须在 model_router 初始化之前执行）
-registry.auto_discover("app.adapters")
+registry.load_from_config(settings.REGISTERED_MODELS)
 # 模型路由器（选择最优大模型）
 model_router = ModelRouter(strategy=RoutingStrategy.COST_FIRST)
 

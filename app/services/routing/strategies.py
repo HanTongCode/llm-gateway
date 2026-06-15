@@ -46,10 +46,14 @@ def cost_first(
     input_tokens = CostEstimator.estimate_input_tokens(messages)
     output_tokens = CostEstimator.estimate_output_tokens(messages, max_tokens)
 
-    best = min(
-        candidates,
-        key=lambda c: CostEstimator.calculate(c[0], input_tokens, output_tokens)
-    )
+    # 成本相同时，按健康度降序排列
+    def sort_key(candidate):
+        adapter, health = candidate
+        cost = CostEstimator.calculate(adapter, input_tokens, output_tokens)
+        # 成本低优先，成本相同时健康度高优先（取负号使得降序）
+        return (cost, -health.health_score)
+
+    best = min(candidates, key=sort_key)
     return best[0]
 
 

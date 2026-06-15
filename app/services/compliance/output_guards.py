@@ -64,7 +64,6 @@ class FinancialComplianceGuard(BaseGuard):
         for rule in self.patterns:
             pattern = rule.get("pattern", "")
             desc = rule.get("description", "合规风险")
-            print(content, pattern, desc, "输出检测")
             if pattern and re.search(pattern, content, re.IGNORECASE):
                 return GuardResult.block(
                     self.name,

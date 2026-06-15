@@ -169,7 +169,7 @@ async def dispatch_to_model(
     # ---- 构造转发请求 ----
     url = f"{base_url}/chat/completions"
     headers = {
-        "Authorization": f"Bearer {settings.LLM_API_KEY}",
+        "Authorization": f"Bearer {adapter.api_key}",
         "Content-Type": "application/json",
     }
 

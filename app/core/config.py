@@ -30,14 +30,60 @@ class Settings:
     # OpenAI 独立 Key（可选，若与 LLM_API_KEY 不同则配置）
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY")
 
-    # ======================== 多模型路由表 ========================
-    # 模型名 → API 基础 URL 映射，新增模型只需在此添加一行
-    MODEL_ROUTES = {
-        "deepseek-chat": os.getenv("LLM_BASE_URL", "https://api.deepseek.com/v1"),
-        "gpt-3.5-turbo": os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-        "gpt-4": os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-    }
-
+    # ======================== 注册模型列表（新增） ========================
+    REGISTERED_MODELS = [
+        {
+            "provider": "deepseek",
+            "model_name": "deepseek-chat",
+            "capabilities": ["chat", "long_context", "function_calling", "json_mode"],
+            "max_context_tokens": 131072,
+            "cost_per_1m_input": 0.14,
+            "cost_per_1m_output": 0.28,
+            "base_url": os.getenv("LLM_BASE_URL", "https://api.deepseek.com/v1"),
+            "api_key": os.getenv("DEEPSEEK_API_KEY", os.getenv("LLM_API_KEY", "")),
+        },
+        {
+            "provider": "openai",
+            "model_name": "gpt-4",
+            "capabilities": ["chat", "reasoning", "function_calling", "json_mode"],
+            "max_context_tokens": 8192,
+            "cost_per_1m_input": 30.0,
+            "cost_per_1m_output": 60.0,
+            "base_url": os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+            "api_key": os.getenv("OPENAI_API_KEY", ""),
+        },
+        # ======================== 模拟模型（不可用，仅验证路由） ========================
+        {
+            "provider": "moonshot",
+            "model_name": "moonshot-v1",
+            "capabilities": ["chat", "long_context"],
+            "max_context_tokens": 128000,
+            "cost_per_1m_input": 0.14,
+            "cost_per_1m_output": 0.28,
+            "base_url": os.getenv("MOONSHOT_BASE_URL", "https://api.moonshot.cn/v1"),
+            "api_key": os.getenv("MOONSHOT_API_KEY", ""),
+        },
+        {
+            "provider": "aliyun",
+            "model_name": "qwen-plus",
+            "capabilities": ["chat", "reasoning", "function_calling"],
+            "max_context_tokens": 131072,
+            "cost_per_1m_input": 0.14,
+            "cost_per_1m_output": 0.28,
+            "base_url": os.getenv("DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+            "api_key": os.getenv("DASHSCOPE_API_KEY", ""),
+        },
+        {
+            "provider": "local",
+            "model_name": "local-qwen",
+            "capabilities": ["chat"],
+            "max_context_tokens": 8192,
+            "cost_per_1m_input": 0.14,
+            "cost_per_1m_output": 0.28,
+            "base_url": os.getenv("LOCAL_LLM_BASE_URL", "http://localhost:11434/v1"),
+            "api_key": "",  # 本地模型无需 Key
+        },
+    ]
     # ======================== 语义缓存配置 ========================
     # 缓存相似度阈值（0~1），值越大匹配越严格
     CACHE_SIMILARITY_THRESHOLD: float = float(os.getenv("CACHE_SIMILARITY_THRESHOLD", "0.55"))
