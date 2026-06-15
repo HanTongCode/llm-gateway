@@ -30,8 +30,11 @@ class OutputGuardViolation(Exception):
 def extract_user_message(messages: list) -> str:
     """从 messages 列表中提取最后一条用户消息"""
     for msg in reversed(messages):
-        if msg.get("role") == "user":
-            return msg.get("content", "")
+        # 兼容 Pydantic 对象和原始字典
+        role = msg.role if hasattr(msg, "role") else msg.get("role", "")
+        content = msg.content if hasattr(msg, "content") else msg.get("content", "")
+        if role == "user":
+            return content
     return ""
 
 
@@ -121,14 +124,19 @@ async def dispatch_to_model(
     body: dict,
     request: Request,
     ctx: AuditContext,
-    input_pipeline,
-    output_pipeline,
+    adapter=None,
+    input_pipeline=None,
+    output_pipeline=None,
 ):
-    """
-    将请求转发到对应的模型后端，执行完整的护栏流程。
-    """
-    model = body.get("model", "deepseek-chat")
-    base_url = settings.MODEL_ROUTES.get(model)
+    # 如果有适配器，用适配器的 base_url；否则走旧逻辑
+    if adapter:
+        base_url = adapter.base_url
+        model = adapter.model_name
+        # 覆盖请求体中的 model，确保发给后端的请求格式正确
+        body["model"] = adapter.model_name
+    else:
+        model = body.get("model", "deepseek-chat")
+        base_url = settings.MODEL_ROUTES.get(model)
 
     # ---- 模型路由校验 ----
     if not base_url:

@@ -11,7 +11,7 @@ class Message(BaseModel):
 
 class ChatRequest(BaseModel):
     """聊天请求体，兼容 OpenAI 格式"""
-    model: str = "deepseek-chat"          # 模型名称
+    model: Optional[str] = None          # 模型名称
     messages: List[Message]               # 对话历史
     stream: Optional[bool] = False        # 是否流式输出
     cache_bypass: Optional[bool] = False  # 是否跳过缓存

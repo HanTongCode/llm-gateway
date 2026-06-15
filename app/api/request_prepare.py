@@ -10,6 +10,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from app.core.audit_context import AuditContext
 from app.models.chat import ChatRequest
+from app.adapters.registry import registry
 
 
 def prepare_request(request: Request, body: ChatRequest):
@@ -52,6 +53,16 @@ def _check_model_access(tenant: dict, model: str) -> JSONResponse | None:
     校验租户是否有权限使用指定模型
     - allowed_models 中包含 "*" 表示允许所有模型
     """
+    if model is None:
+        return None  # 未指定模型，跳过权限校验
+        # 检查模型是否已注册
+    try:
+        registry.get_adapter_by_model(model)  # 需要一个按 model_name 查找的方法
+    except KeyError:
+        return JSONResponse(
+            {"error": f"无效的模型: {model}"},
+            status_code=400,
+        )
     allowed = tenant.get("allowed_models", ["*"])
     if model not in allowed and "*" not in allowed:
         return JSONResponse(
