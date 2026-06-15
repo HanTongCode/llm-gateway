@@ -9,7 +9,7 @@ from app.adapters.registry import registry
 from app.adapters.base import BaseAdapter
 from app.services.routing.health import HealthTracker
 from app.services.routing import strategies
-
+from app.services.resilience.circuit_breaker import CircuitBreakerManager
 
 class RoutingStrategy:
     """路由策略常量"""
@@ -24,7 +24,7 @@ class ModelRouter:
     def __init__(self, strategy: str = RoutingStrategy.WEIGHTED_RANDOM):
         self.strategy = strategy
         self.health_tracker = HealthTracker()
-
+        self.circuit_breaker = CircuitBreakerManager()
     def select_model(
         self,
         required_capability: str = "chat",
@@ -54,6 +54,13 @@ class ModelRouter:
         candidates = self.health_tracker.get_candidates(required_capability, registry)
         if not candidates:
             raise RuntimeError(f"无可用模型支持能力: {required_capability}")
+            # 过滤熔断中或不允许通过的模型
+        candidates = [
+            (a, h) for a, h in candidates
+            if self.circuit_breaker.get(a.provider, a.model_name).call()
+        ]
+        if not candidates:
+            raise RuntimeError(f"所有支持 {required_capability} 的模型均已熔断或不可用")
         # 2. 如果客户端指定了模型，优先查找
         if preferred_model:
             for adapter, health in candidates:
@@ -105,10 +112,14 @@ class ModelRouter:
             latency: 本次请求的延迟（秒）
         """
         health = self.health_tracker.get(provider, model_name)
+        breaker = self.circuit_breaker.get(provider, model_name)
         health.current_load = max(0, health.current_load - 1)
         health.total += 1
         if success:
             health.success += 1
+            breaker.on_success()
+        else:
+            breaker.on_failure()
         health.latency_window.append(latency)
         if len(health.latency_window) > 50:
             health.latency_window.pop(0)

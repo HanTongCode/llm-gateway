@@ -63,26 +63,42 @@ async def chat_completions(body: ChatRequest, request: Request):
     if response:
         return response
 
-    # 3. 路由引擎选择最优模型
+    adapter = None
+    success = False
     try:
         adapter = model_router.select_model(
             required_capability="chat",
-             messages=body.messages,
-            preferred_model=body.model,  # 客户端指定时优先，为None时自动选择
+            messages=body.messages,
+            preferred_model=body.model,
         )
+        response = await dispatch_to_model(
+            body.model_dump(), request, ctx,
+            adapter=adapter,
+            input_pipeline=input_pipeline,
+            output_pipeline=output_pipeline,
+        )
+        success = ctx.status_code == 200
     except RuntimeError as e:
-        return JSONResponse(
+        # 无可用模型（包括所有模型熔断或过载）
+        success = False
+        response = JSONResponse(
             {"error": f"无可用模型: {str(e)}"},
             status_code=503,
         )
+    except Exception:
+        # 转发过程中的网络/后端错误
+        success = False
+        response = JSONResponse({"error": "内部错误"}, status_code=500)
+    finally:
+        if adapter:
+            model_router.record_result(
+                adapter.provider, adapter.model_name,
+                success=success,
+                latency=time_module.time() - ctx.start_time,
+            )
 
-    # 4. 模型转发（护栏 + 路由 + 调用）
-    response = await dispatch_to_model(
-        body.model_dump(), request, ctx,
-        adapter=adapter,
-        input_pipeline=input_pipeline,
-        output_pipeline=output_pipeline  # 传入管道
-    )
+    finalize_request(ctx, body, response)
+    return response
     # 5. 记录路由结果
     model_router.record_result(
         provider=adapter.provider,
