@@ -7,6 +7,8 @@
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 import time as time_module
+
+from app.api.fallback_handler import execute_with_fallback
 from app.models.chat import ChatRequest
 from app.api.request_prepare import prepare_request
 from app.api.cache_handler import try_fulfill_cache
@@ -63,51 +65,10 @@ async def chat_completions(body: ChatRequest, request: Request):
     if response:
         return response
 
-    adapter = None
-    success = False
-    try:
-        adapter = model_router.select_model(
-            required_capability="chat",
-            messages=body.messages,
-            preferred_model=body.model,
+    # 3. 模型调用（内部包含 Fallback 处理）
+    response = await execute_with_fallback(
+            body, ctx, model_router, input_pipeline, output_pipeline,
         )
-        response = await dispatch_to_model(
-            body.model_dump(), request, ctx,
-            adapter=adapter,
-            input_pipeline=input_pipeline,
-            output_pipeline=output_pipeline,
-        )
-        success = ctx.status_code == 200
-    except RuntimeError as e:
-        # 无可用模型（包括所有模型熔断或过载）
-        success = False
-        response = JSONResponse(
-            {"error": f"无可用模型: {str(e)}"},
-            status_code=503,
-        )
-    except Exception:
-        # 转发过程中的网络/后端错误
-        success = False
-        response = JSONResponse({"error": "内部错误"}, status_code=500)
-    finally:
-        if adapter:
-            model_router.record_result(
-                adapter.provider, adapter.model_name,
-                success=success,
-                latency=time_module.time() - ctx.start_time,
-            )
 
     finalize_request(ctx, body, response)
-    return response
-    # 5. 记录路由结果
-    model_router.record_result(
-        provider=adapter.provider,
-        model_name=adapter.model_name,
-        success=ctx.status_code == 200,
-        latency=time_module.time() - ctx.start_time,
-    )
-
-    # 6. 后置收尾（指标 + 缓存 + 审计）
-    finalize_request(ctx, body, response)
-
     return response

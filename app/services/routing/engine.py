@@ -25,75 +25,50 @@ class ModelRouter:
         self.strategy = strategy
         self.health_tracker = HealthTracker()
         self.circuit_breaker = CircuitBreakerManager()
-    def select_model(
-        self,
-        required_capability: str = "chat",
-        messages: list = None,
-        max_tokens: int = None,
-        agent_id: Optional[str] = None,
-        preferred_provider: Optional[str] = None,
-        preferred_model: Optional[str] = None,
-    ) -> BaseAdapter:
-        """
-        选择最优模型。
 
-        Args:
-            required_capability: 请求需要的能力（如 "chat", "reasoning"）
-            messages: 请求消息列表（用于成本估算）
-            max_tokens: 最大输出 token 数（用于成本估算）
-            agent_id: Agent 标识（预留）
-            preferred_provider: 优先提供商（可选）
-
-        Returns:
-            选中的适配器实例
-
-        Raises:
-            RuntimeError: 无可用模型
-        """
-        # 1. 获取候选模型（已过滤不支持能力和过载的）
+    def get_ranked_candidates(
+            self,
+            required_capability: str = "chat",
+            messages: list = None,
+            max_tokens: int = None,
+            preferred_model: str = None,
+    ) -> list[BaseAdapter]:
+        # 1. 获取原始候选（已过滤能力不匹配和过载）
         candidates = self.health_tracker.get_candidates(required_capability, registry)
-        if not candidates:
+        # 2. 过滤熔断中的模型
+        filtered = []
+        for adapter, health in candidates:
+            if not self.circuit_breaker.get(adapter.provider, adapter.model_name).call():
+                continue
+            filtered.append(adapter)
+        if not filtered:
             raise RuntimeError(f"无可用模型支持能力: {required_capability}")
-            # 过滤熔断中或不允许通过的模型
-        candidates = [
-            (a, h) for a, h in candidates
-            if self.circuit_breaker.get(a.provider, a.model_name).call()
-        ]
-        if not candidates:
-            raise RuntimeError(f"所有支持 {required_capability} 的模型均已熔断或不可用")
-        # 2. 如果客户端指定了模型，优先查找
-        if preferred_model:
-            for adapter, health in candidates:
-                if adapter.model_name == preferred_model:
-                    # 检查是否过载
-                    if health.is_overloaded:
-                        raise RuntimeError(f"指定模型 {preferred_model} 当前过载，请稍后重试")
-                    health.current_load += 1
-                    return adapter
-            raise RuntimeError(f"指定模型 {preferred_model} 不支持能力 {required_capability} 或未注册")
-        # 2. 如果指定优先提供商，进一步筛选
-        if preferred_provider:
-            candidates = [
-                (a, h) for a, h in candidates
-                if a.provider == preferred_provider
-            ]
-            if not candidates:
-                raise RuntimeError(f"提供商 {preferred_provider} 无可用模型")
 
-        # 3. 根据策略选择
-        if self.strategy == RoutingStrategy.WEIGHTED_RANDOM:
-            adapter = strategies.weighted_random(candidates)
-        elif self.strategy == RoutingStrategy.COST_FIRST:
-            adapter = strategies.cost_first(candidates, messages or [], max_tokens)
+        # 3. 按策略排序
+        if self.strategy == RoutingStrategy.COST_FIRST:
+            filtered.sort(key=lambda a: a.cost_per_1m_input)
         elif self.strategy == RoutingStrategy.LATENCY_FIRST:
-            adapter = strategies.latency_first(candidates)
+            filtered.sort(
+                key=lambda a: self.health_tracker.get(
+                    a.provider, a.model_name
+                ).avg_latency
+            )
         else:
-            raise ValueError(f"未知路由策略: {self.strategy}")
+            filtered.sort(
+                key=lambda a: self.health_tracker.get(
+                    a.provider, a.model_name
+                ).health_score,
+                reverse=True,
+            )
 
-        # 4. 记录并发
-        self.health_tracker.get(adapter.provider, adapter.model_name).current_load += 1
+        # 4. 首选模型提到第一位
+        if preferred_model:
+            for i, adapter in enumerate(filtered):
+                if adapter.model_name == preferred_model:
+                    filtered.insert(0, filtered.pop(i))
+                    break
 
-        return adapter
+        return filtered
 
     def record_result(
         self,
@@ -117,9 +92,11 @@ class ModelRouter:
         health.total += 1
         if success:
             health.success += 1
+            health.consecutive_failures = 0
             breaker.on_success()
         else:
             breaker.on_failure()
+            health.consecutive_failures += 1
         health.latency_window.append(latency)
         if len(health.latency_window) > 50:
             health.latency_window.pop(0)

@@ -23,7 +23,7 @@ class ModelHealth:
     total: int = 0                          # 累计总调用次数
     latency_window: List[float] = field(default_factory=list)  # 最近50次延迟（秒）
     last_updated: float = field(default_factory=time.time)
-
+    consecutive_failures: int = 0
     @property
     def key(self) -> str:
         """唯一标识"""

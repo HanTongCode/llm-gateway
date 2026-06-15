@@ -122,7 +122,6 @@ def _update_last_user_message(messages: list, new_content: str):
 
 async def dispatch_to_model(
     body: dict,
-    request: Request,
     ctx: AuditContext,
     adapter=None,
     input_pipeline=None,
