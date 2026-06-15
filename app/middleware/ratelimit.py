@@ -23,7 +23,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     # 默认限流参数（后续可改为从 Redis 租户配置中动态读取）
     DEFAULT_RATE = 10       # 每秒生成 10 个令牌
-    DEFAULT_CAPACITY = 20   # 桶容量 20，允许短时突发 20 个请求
+    DEFAULT_CAPACITY = 200   # 桶容量 20，允许短时突发 20 个请求
 
     async def dispatch(self, request: Request, call_next):
         # ---- 1. 路径过滤 ----

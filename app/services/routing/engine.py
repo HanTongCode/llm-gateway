@@ -26,25 +26,41 @@ class ModelRouter:
         self.health_tracker = HealthTracker()
         self.circuit_breaker = CircuitBreakerManager()
 
-    def get_ranked_candidates(
+    async def get_ranked_candidates(
             self,
             required_capability: str = "chat",
             messages: list = None,
             max_tokens: int = None,
-            preferred_model: str = None,
     ) -> list[BaseAdapter]:
-        # 1. 获取原始候选（已过滤能力不匹配和过载）
-        candidates = self.health_tracker.get_candidates(required_capability, registry)
-        # 2. 过滤熔断中的模型
+        """
+        返回按当前策略排序的可用模型列表，用于自动路由。
+        自动过滤：能力不匹配、熔断中、并发已满的模型。
+        """
+        # 1. 从注册中心获取支持该能力的适配器
+        all_adapters = registry.find_by_capability(required_capability)
+
+        # 2. 批量获取所有模型的实时并发数
+        model_keys = [(a.provider, a.model_name) for a in all_adapters.values()]
+        loads = await self.health_tracker.get_all_current_loads(model_keys)
+        print(f"[ENGINE] 并发读数: {loads}")
+        # 3. 过滤
         filtered = []
-        for adapter, health in candidates:
+        for key, adapter in all_adapters.items():
+            # 熔断检查
             if not self.circuit_breaker.get(adapter.provider, adapter.model_name).call():
                 continue
+            # 并发满检查
+            current = loads.get(f"{adapter.provider}:{adapter.model_name}", 0)
+            max_load = getattr(adapter, "max_concurrency", 10)
+            print(f"[ENGINE] 模型 {adapter.model_name}: current={current}, max={max_load}, 过滤={'是' if current >= max_load else '否'}")
+            if current >= max_load:
+                continue
             filtered.append(adapter)
+
         if not filtered:
             raise RuntimeError(f"无可用模型支持能力: {required_capability}")
 
-        # 3. 按策略排序
+        # 4. 按当前策略排序
         if self.strategy == RoutingStrategy.COST_FIRST:
             filtered.sort(key=lambda a: a.cost_per_1m_input)
         elif self.strategy == RoutingStrategy.LATENCY_FIRST:
@@ -60,14 +76,7 @@ class ModelRouter:
                 ).health_score,
                 reverse=True,
             )
-
-        # 4. 首选模型提到第一位
-        if preferred_model:
-            for i, adapter in enumerate(filtered):
-                if adapter.model_name == preferred_model:
-                    filtered.insert(0, filtered.pop(i))
-                    break
-
+        print(f"最后的模型{filtered}")
         return filtered
 
     def record_result(

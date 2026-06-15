@@ -183,7 +183,10 @@ async def dispatch_to_model(
     async with aiohttp.ClientSession() as session:
         async with session.post(url, json=body, headers=headers) as resp:
             data = await resp.json()
-
+            ctx.status_code = resp.status
+            if resp.status != 200:
+                ctx.error = data.get("error", {}).get("message", "unknown error")
+                return JSONResponse(content=data, status_code=resp.status)
     # ---- 输出护栏检查 ----
     try:
         await _check_output(data, output_pipeline)
