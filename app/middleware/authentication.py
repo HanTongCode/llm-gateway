@@ -1,90 +1,106 @@
 """
-多租户鉴权中间件
-----------------
-功能：
-1. 从请求头 Authorization: Bearer <API_KEY> 提取凭证
-2. 查询 Redis 中的租户信息（tenant:{api_key}）
-3. 验证 API Key 有效性、租户状态（active/disabled）
-4. 将租户 ID、名称、允许的模型列表注入 request.state
+身份识别中间件
+--------------
+从请求头提取 API Key，通过本地缓存 + Redis 验证租户身份。
+本地缓存默认 30 秒过期，过期后自动从 Redis 刷新。
+首次请求时懒加载所有租户配置到本地内存，后续请求直接读缓存。
 """
+import time
+import asyncio
 import redis.asyncio as redis
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
-
-# 配置模块
 from app.core.config import settings
+
+# ======================== 本地缓存 ========================
+# 结构：{api_key: {"data": {...}, "expire_at": 1234567890.0}}
+_tenant_cache: dict[str, dict] = {}
+_cache_lock = asyncio.Lock()
+CACHE_TTL = 30  # 缓存过期时间（秒）
 
 
 class TenantAuthMiddleware(BaseHTTPMiddleware):
-    """
-    多租户鉴权中间件
-    - 只拦截聊天接口 /v1/chat/completions
-    - 其他路径（/health、/metrics、/docs）直接放行
-    """
+    """API Key 身份识别中间件"""
 
     async def dispatch(self, request: Request, call_next):
-        # ---- 1. 路径过滤：只对聊天接口鉴权 ----
         if request.url.path != "/v1/chat/completions":
             return await call_next(request)
 
-        # ---- 2. 提取 API Key ----
-        # 格式：Authorization: Bearer sk-xxx
+        # ---- 1. 提取 API Key ----
         auth_header = request.headers.get("Authorization", "")
         api_key = auth_header.replace("Bearer ", "").strip()
-
-        # 无 Key 直接返回 401
         if not api_key:
-            return JSONResponse(
-                {"error": "缺少 API Key，请在 Authorization 头中提供"},
-                status_code=401,
-            )
+            return JSONResponse({"error": "缺少 API Key"}, status_code=401)
 
-        # ---- 3. 从 Redis 加载租户配置 ----
+        # ---- 2. 查询租户信息（优先本地缓存） ----
+        tenant = await _get_tenant(api_key)
+        if not tenant:
+            return JSONResponse({"error": "无效的 API Key"}, status_code=403)
+
+        if tenant["status"] != "active":
+            return JSONResponse({"error": "租户已禁用"}, status_code=403)
+
+        # ---- 3. 注入到 request.state ----
+        request.state.tenant = tenant
+        request.state.api_key = api_key
+        return await call_next(request)
+
+
+async def _get_tenant(api_key: str) -> dict | None:
+    """
+    获取租户信息，优先从本地缓存读取。
+    缓存未命中或过期时，从 Redis 加载并更新缓存。
+    """
+    now = time.time()
+
+    # ---- 命中缓存且未过期 → 直接返回 ----
+    cached = _tenant_cache.get(api_key)
+    if cached and cached["expire_at"] > now:
+        return cached["data"]
+
+    # ---- 缓存未命中或过期 → 加锁后从 Redis 加载 ----
+    async with _cache_lock:
+        # 双重检查：可能前一个请求已经刷新了缓存
+        cached = _tenant_cache.get(api_key)
+        if cached and cached["expire_at"] > now:
+            return cached["data"]
+
+        # 从 Redis 加载
         try:
             r = redis.from_url(settings.REDIS_URL, protocol=2)
             tenant_raw = await r.hgetall(f"tenant:{api_key}")
             await r.close()
         except Exception:
-            return JSONResponse(
-                {"error": "鉴权服务不可用"},
-                status_code=500,
-            )
+            # Redis 不可用时，如果缓存存在（即使过期）也先顶着用
+            if cached:
+                return cached["data"]
+            return None
 
-        # Key 无效返回 403
         if not tenant_raw:
-            return JSONResponse(
-                {"error": "无效的 API Key"},
-                status_code=403,
-            )
-
-        # ---- 4. 解析租户配置 ----
-        def safe_decode(b: bytes) -> str:
-            """兼容 Windows 终端 GBK 编码"""
-            try:
-                return b.decode("utf-8")
-            except UnicodeDecodeError:
-                return b.decode("gbk")
+            return None
 
         tenant = {
-            "id": safe_decode(tenant_raw.get(b"id", b"")),
-            "name": safe_decode(tenant_raw.get(b"name", b"")),
-            "allowed_models": (
-                safe_decode(tenant_raw.get(b"allowed_models", b"*")).split(",")
-            ),
-            "status": safe_decode(tenant_raw.get(b"status", b"active")),
+            "id": _safe_decode(tenant_raw.get(b"id", b"")),
+            "name": _safe_decode(tenant_raw.get(b"name", b"")),
+            "allowed_models": _safe_decode(
+                tenant_raw.get(b"allowed_models", b"*")
+            ).split(","),
+            "status": _safe_decode(tenant_raw.get(b"status", b"active")),
         }
 
-        # ---- 5. 状态校验 ----
-        if tenant["status"] != "active":
-            return JSONResponse(
-                {"error": "该租户已被禁用"},
-                status_code=403,
-            )
+        # 更新本地缓存
+        _tenant_cache[api_key] = {
+            "data": tenant,
+            "expire_at": now + CACHE_TTL,
+        }
 
-        # ---- 6. 注入到 request.state，下游模块直接使用 ----
-        request.state.tenant = tenant
-        request.state.api_key = api_key
+        return tenant
 
-        # ---- 7. 放行请求 ----
-        return await call_next(request)
+
+def _safe_decode(b: bytes) -> str:
+    """兼容 Windows 终端 GBK 编码"""
+    try:
+        return b.decode("utf-8")
+    except UnicodeDecodeError:
+        return b.decode("gbk")
