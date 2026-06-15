@@ -41,9 +41,12 @@ output_pipeline = GuardPipeline([
 router = APIRouter()
 # 自动发现并加载所有适配器（必须在 model_router 初始化之前执行）
 registry.load_from_config(settings.REGISTERED_MODELS)
+
 # 模型路由器（选择最优大模型）
 model_router = ModelRouter(strategy=RoutingStrategy.COST_FIRST)
-
+# 初始化所有模型的健康度数据
+for adapter in registry.get_all_adapters().values():
+    model_router.health_tracker.get(adapter.provider, adapter.model_name)
 @router.post("/v1/chat/completions")
 async def chat_completions(body: ChatRequest, request: Request):
     """

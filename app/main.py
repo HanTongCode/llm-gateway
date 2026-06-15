@@ -13,7 +13,7 @@ from app.middleware.authentication import TenantAuthMiddleware
 
 # 路由
 from app.api.v1 import chat
-
+from app.api import admin
 
 def create_app() -> FastAPI:
     """创建 FastAPI 应用"""
@@ -25,7 +25,7 @@ def create_app() -> FastAPI:
 
     # 注册路由
     app.include_router(chat.router)
-
+    app.include_router(admin.router)
     # Prometheus 指标端点
     @app.get("/metrics")
     async def metrics():
