@@ -7,6 +7,8 @@ Fallback 处理器
 import asyncio
 import time as time_module
 from fastapi.responses import JSONResponse
+from starlette.responses import StreamingResponse
+
 from app.models.chat import ChatRequest
 from app.services.routing.router import dispatch_to_model
 from app.adapters.registry import registry
@@ -64,7 +66,9 @@ async def execute_with_fallback(
         await model_router.health_tracker.release_slot(
             adapter.provider, adapter.model_name
         )
-
+        # 如果是流式响应，直接返回，不检查 ctx.status_code
+        if isinstance(response, StreamingResponse):
+            return response
         return response if success else JSONResponse({"error": "模型返回错误"}, status_code=502)
 
     # ======================== 自动路由分支 ========================
@@ -99,27 +103,25 @@ async def execute_with_fallback(
                 input_pipeline=input_pipeline,
                 output_pipeline=output_pipeline,
             )
-        except Exception as e:
+            if isinstance(response, StreamingResponse):
+                return response
+            latency = time_module.time() - ctx.start_time
+            success = ctx.status_code == 200
+            model_router.record_result(adapter.provider, adapter.model_name, success, latency)
+
+            if success:
+                if i > 0 and switched_from:
+                    if hasattr(response, "headers"):
+                        response.headers["X-Model-Switched"] = "true"
+                        response.headers["X-Original-Model"] = switched_from
+                        response.headers["X-Actual-Model"] = adapter.model_name
+                return response
+
+        except Exception:
             model_router.record_result(adapter.provider, adapter.model_name, False, 0)
-            await model_router.health_tracker.release_slot(
-                adapter.provider, adapter.model_name
-            )
             continue
-
-        latency = time_module.time() - ctx.start_time
-        success = ctx.status_code == 200
-        model_router.record_result(adapter.provider, adapter.model_name, success, latency)
-        await model_router.health_tracker.release_slot(
-            adapter.provider, adapter.model_name
-        )
-
-        if success:
-            if i > 0 and switched_from:
-                if hasattr(response, "headers"):
-                    response.headers["X-Model-Switched"] = "true"
-                    response.headers["X-Original-Model"] = switched_from
-                    response.headers["X-Actual-Model"] = adapter.model_name
-            return response
+        finally:
+            await model_router.health_tracker.release_slot(adapter.provider, adapter.model_name)
 
     return JSONResponse({
         "error": "所有模型不可用，已尝试切换，请稍后重试",
