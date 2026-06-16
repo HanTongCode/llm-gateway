@@ -88,7 +88,6 @@ async def execute_with_fallback(
         acquired = await model_router.health_tracker.acquire_slot(
             adapter.provider, adapter.model_name, max_load
         )
-        print(f"[FALLBACK] 尝试模型 {adapter.model_name}, acquired={acquired}")
         if not acquired:
             continue  # 槽位满，跳过
 
@@ -100,9 +99,7 @@ async def execute_with_fallback(
                 input_pipeline=input_pipeline,
                 output_pipeline=output_pipeline,
             )
-            print(f"[FALLBACK] 调用 {adapter.model_name} 完成, ctx.status_code={ctx.status_code}")
         except Exception as e:
-            print(f"[FALLBACK] 调用 {adapter.model_name} 异常: {e}")
             model_router.record_result(adapter.provider, adapter.model_name, False, 0)
             await model_router.health_tracker.release_slot(
                 adapter.provider, adapter.model_name
@@ -117,8 +114,6 @@ async def execute_with_fallback(
         )
 
         if success:
-            if hasattr(response, 'body'):
-                print(f"[FALLBACK] {adapter.model_name} 响应内容: {response.body[:200]}")
             if i > 0 and switched_from:
                 if hasattr(response, "headers"):
                     response.headers["X-Model-Switched"] = "true"

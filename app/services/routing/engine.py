@@ -42,7 +42,6 @@ class ModelRouter:
         # 2. 批量获取所有模型的实时并发数
         model_keys = [(a.provider, a.model_name) for a in all_adapters.values()]
         loads = await self.health_tracker.get_all_current_loads(model_keys)
-        print(f"[ENGINE] 并发读数: {loads}")
         # 3. 过滤
         filtered = []
         for key, adapter in all_adapters.items():
@@ -52,7 +51,6 @@ class ModelRouter:
             # 并发满检查
             current = loads.get(f"{adapter.provider}:{adapter.model_name}", 0)
             max_load = getattr(adapter, "max_concurrency", 10)
-            print(f"[ENGINE] 模型 {adapter.model_name}: current={current}, max={max_load}, 过滤={'是' if current >= max_load else '否'}")
             if current >= max_load:
                 continue
             filtered.append(adapter)
@@ -76,7 +74,6 @@ class ModelRouter:
                 ).health_score,
                 reverse=True,
             )
-        print(f"最后的模型{filtered}")
         return filtered
 
     def record_result(

@@ -75,7 +75,6 @@ class HealthTracker:
         """
         result = await r.eval(script, 1, key, max_load)
         current = await r.get(key)
-        print(f"[SLOT] acquire {model_name}: result={result}, current={current}")
         return result == 1
 
     async def _release_redis_slot(self, provider: str, model_name: str):
@@ -141,6 +140,4 @@ class HealthTracker:
 
         # 无等待者，释放 Redis 槽位
         await self._release_redis_slot(provider, model_name)
-        r = await self._get_redis()
-        current = await r.get(f"concurrency:{provider}:{model_name}")
-        print(f"[SLOT] 释放 Redis 槽位 {model_name}: current={current}")
+
